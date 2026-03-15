@@ -1,0 +1,64 @@
+package com.sys.pro;
+import java.io.*;
+import java.net.*;
+import java.util.*;
+public class Client1 {
+	public static void main(String[] args) {
+
+        try {
+            Socket socket = new Socket("localhost", 5000);
+
+            System.out.println("Client started...");
+            System.out.println("Connected to server!");
+
+            BufferedReader userInput =
+                    new BufferedReader(new InputStreamReader(System.in));
+
+            BufferedReader in =
+                    new BufferedReader(new InputStreamReader(socket.getInputStream()));
+
+            PrintWriter out =
+                    new PrintWriter(socket.getOutputStream(), true);
+
+            while (true) {
+
+                System.out.println("\nEnter command (PUT/GET/EXIT):");
+                String command = userInput.readLine();
+
+                if (command.equalsIgnoreCase("PUT")) {
+
+                    System.out.print("Enter key: ");
+                    String key = userInput.readLine();
+
+                    System.out.print("Enter value: ");
+                    String value = userInput.readLine();
+
+                    out.println("PUT," + key + "," + value);
+
+                    System.out.println(in.readLine());
+                }
+
+                else if (command.equalsIgnoreCase("GET")) {
+
+                    System.out.print("Enter key: ");
+                    String key = userInput.readLine();
+
+                    out.println("GET," + key);
+
+                    System.out.println(in.readLine());
+                }
+
+                else if (command.equalsIgnoreCase("EXIT")) {
+                	out.println("EXIT");
+                    System.out.println(in.readLine());
+                    break;
+                }
+            }
+
+            socket.close();
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
