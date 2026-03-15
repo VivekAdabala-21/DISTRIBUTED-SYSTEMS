@@ -1,0 +1,98 @@
+package com.sys.pro;
+import java.io.*;
+import java.net.*;
+import java.util.HashMap;
+public class Server1 {
+	public static void main(String[]args)
+	
+	{
+		HashMap<String, String> database = new HashMap<>();
+		try 
+		{
+			ServerSocket serverSocket = new ServerSocket(5000);
+			System.out.println(" Server started and waiting for client");
+			
+			Socket socket = serverSocket.accept();
+			System.out.println(" client was connected! ");
+			
+			BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+			
+			PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+			
+			String message;
+
+            while (true) {
+            	message = in.readLine();
+            	if (message == null)
+            	{
+            		System.out.println("Client disconnected.");
+                    break;
+            	}
+            	
+            	 System.out.println("Received: " + message);
+            	 
+            	// First check EXIT
+                if (message.equalsIgnoreCase("EXIT")) {
+                    out.println("Connection closed by client.");
+                    break;
+                }
+
+                String[] parts = message.split(",", 3);
+
+                if (parts.length < 2) {
+                    out.println("ERROR: Invalid command format");
+                    continue;
+                }
+
+                String command = parts[0];
+
+                if (command.equalsIgnoreCase("PUT")) {
+
+                    if (parts.length < 3) {
+                        out.println("ERROR: PUT requires key and value");
+                        continue;
+                    }
+
+                    String key = parts[1];
+                    String value = parts[2];
+
+                    database.put(key, value);
+
+                    System.out.println("Stored -> " + key + " : " + value);
+
+                    out.println("ACK: Stored successfully | DATA: " + database.get(key));
+                }
+
+                else if (command.equalsIgnoreCase("GET")) {
+
+                    String key = parts[1];
+
+                    if (database.containsKey(key)) {
+                        String value = database.get(key);
+                        out.println("DATA: " + value);
+                        System.out.println("Fetched -> " + key + " : " + value);
+                    } else {
+                        out.println("ERROR: No data found for " + key);
+                    }
+                }
+
+                else {
+                    out.println("ERROR: Unknown command");
+                }
+            
+                
+
+            }
+
+            socket.close();
+            serverSocket.close();
+		}
+		catch(Exception e)
+		{
+			e.printStackTrace();
+		}
+		
+	}
+	
+
+}
