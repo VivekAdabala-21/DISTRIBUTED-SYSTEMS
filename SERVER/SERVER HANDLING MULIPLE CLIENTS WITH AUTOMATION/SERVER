@@ -1,0 +1,56 @@
+package com.sys.main;
+import java.io.*;
+import java.net.*;
+public class MultiClientServer {
+	public static void main(String[] args) {
+
+        try {
+            ServerSocket serverSocket = new ServerSocket(5000);
+
+            System.out.println("Server started on port 5000...");
+
+            while (true) {
+
+                Socket socket = serverSocket.accept();
+                System.out.println("Client connected: " + socket);
+
+                new Thread(new ClientHandler(socket)).start();
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+class ClientHandler implements Runnable {
+
+    private Socket socket;
+
+    ClientHandler(Socket socket) {
+        this.socket = socket;
+    }
+
+    public void run() {
+
+        try {
+
+            BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(socket.getInputStream()));
+
+            PrintWriter writer = new PrintWriter(
+                    socket.getOutputStream(), true);
+
+            String message = reader.readLine();
+
+            System.out.println("Message from client: " + message);
+
+            writer.println("Server received: " + message);
+
+            socket.close();
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
