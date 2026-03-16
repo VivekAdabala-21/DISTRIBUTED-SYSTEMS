@@ -1,49 +1,85 @@
-package com.sys.main;
-import java.io.*;
-import java.net.*;
-import java.util.concurrent.*;
-public class ClientSimulator {
-	public static void main(String[] args) {
+package com.sys.main; // defines the package where this class belongs
 
-        int numberOfClients = 500; // change to 1000 later
+import java.io.*; // imports input-output classes (BufferedReader, PrintWriter etc.)
+import java.net.*; // imports networking classes (ServerSocket, Socket)
 
-        ExecutorService executor = Executors.newFixedThreadPool(100);
+public class MultiClientServer {
 
-        for (int i = 0; i < numberOfClients; i++) {
+    public static void main(String[] args) {
 
-            int clientId = i;
+        try {
 
-            executor.submit(() -> {
+            // Create a server socket that listens on port 5000
+            ServerSocket serverSocket = new ServerSocket(5000);
 
-                try {
+            // Print message to show server started successfully
+            System.out.println("Server started on port 5000...");
 
-                    Socket socket = new Socket("localhost", 5000);
+            // Infinite loop so the server keeps running
+            while (true) {
 
-                    PrintWriter writer = new PrintWriter(
-                            socket.getOutputStream(), true);
+                // Wait (block) until a client connects
+                Socket socket = serverSocket.accept();
 
-                    BufferedReader reader = new BufferedReader(
-                            new InputStreamReader(socket.getInputStream()));
+                // Print information about the connected client
+                System.out.println("Client connected: " + socket);
 
-                    writer.println("Hello from client " + clientId);
-
-                    String response = reader.readLine();
-
-                    System.out.println("Client " + clientId + " received: " + response);
-
-                    socket.close();
-
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-            });
-            try {
-                Thread.sleep(50);
-            } catch (InterruptedException e) {
-                e.printStackTrace();
+                // Create a new thread to handle the client
+                // This allows multiple clients to connect at the same time
+                new Thread(new ClientHandler(socket)).start();
             }
-        }
 
-        executor.shutdown();
+        } catch (Exception e) {
+
+            // If any error occurs, print stack trace
+            e.printStackTrace();
+        }
     }
 }
+
+
+// This class handles communication with each client
+class ClientHandler implements Runnable {
+
+    // Socket object representing the connected client
+    private Socket socket;
+
+    // Constructor receives client socket from server
+    ClientHandler(Socket socket) {
+
+        // Store the socket so we can use it inside run()
+        this.socket = socket;
+    }
+
+    // run() method executes when the thread starts
+    public void run() {
+
+        try {
+
+            // Create reader to read text from the client
+            BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(socket.getInputStream()));
+
+            // Create writer to send text to the client
+            PrintWriter writer = new PrintWriter(
+                    socket.getOutputStream(), true);
+
+            // Read one line message sent by the client
+            String message = reader.readLine();
+
+            // Print the received message on the server console
+            System.out.println("Message from client: " + message);
+
+            // Send response back to the client
+            writer.println("Server received: " + message);
+
+            // Close the client connection
+            socket.close();
+
+        } catch (Exception e) {
+
+            // Print error if something goes wrong
+            e.printStackTrace();
+        }
+    }
+} 
