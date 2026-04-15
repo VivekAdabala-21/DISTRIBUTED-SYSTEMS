@@ -1,0 +1,135 @@
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.concurrent.*;
+
+public class ClientAutomation {
+    private static final TreeMap<Integer, String> clientOutputs = new TreeMap<>();
+
+    public static void main(String[] args) throws InterruptedException {
+        int clientCount = 10000;
+        String host = "127.0.0.1";
+        int port = 9091;
+
+        if (args.length > 0) {
+            try {
+                clientCount = Integer.parseInt(args[0]);
+            } catch (NumberFormatException ignored) {
+                System.err.println("First argument must be client count. Using default 10000.");
+            }
+        }
+        if (args.length > 1) {
+            host = args[1];
+        }
+        if (args.length > 2) {
+            try {
+                port = Integer.parseInt(args[2]);
+            } catch (NumberFormatException ignored) {
+                System.err.println("Third argument must be port number. Using default 9091.");
+            }
+        }
+
+        int threadPoolSize = Math.min(clientCount, 500);
+        ExecutorService executor = Executors.newFixedThreadPool(threadPoolSize);
+        CountDownLatch allDone = new CountDownLatch(clientCount);
+        List<Future<String>> futures = new ArrayList<>(clientCount);
+
+        System.out.println("Starting " + clientCount + " clients against " + host + ":" + port);
+        final String serverHost = host;
+        final int serverPort = port;
+        final CountDownLatch done = allDone;
+
+        for (int i = 1; i <= clientCount; i++) {
+            final int clientId = i;
+            futures.add(executor.submit(new Callable<String>() {
+                @Override
+                public String call() {
+                    return runClient(clientId, serverHost, serverPort, done);
+                }
+            }));
+        }
+
+        allDone.await();
+        executor.shutdownNow();
+
+        int successCount = 0;
+        int failureCount = 0;
+        for (Future<String> future : futures) {
+            try {
+                String result = future.get();
+                if (result != null && result.startsWith("SUCCESS")) {
+                    successCount++;
+                } else {
+                    failureCount++;
+                }
+            } catch (ExecutionException e) {
+                failureCount++;
+            }
+        }
+
+        System.out.println("\n=== CLIENT OUTPUT ===");
+        synchronized (clientOutputs) {
+            for (Map.Entry<Integer, String> entry : clientOutputs.entrySet()) {
+                System.out.println(entry.getValue());
+            }
+        }
+
+        System.out.println("\n=== Summary ===");
+        System.out.println("Total clients: " + clientCount);
+        System.out.println("Succeeded: " + successCount);
+        System.out.println("Failed: " + failureCount);
+        System.out.println("Client automation finished.");
+    }
+
+    private static String runClient(int clientId, String host, int port, CountDownLatch done) {
+        String request = "hey server iam client number " + clientId + "\n";
+        String expectedPrefix = "hii client " + clientId;
+        int maxRetries = 3;
+        int attempt = 0;
+        
+        try {
+            while (attempt < maxRetries) {
+                try (Socket socket = new Socket()) {
+                    socket.connect(new InetSocketAddress(host, port), 10000);
+                    socket.setSoTimeout(10000);
+                    PrintWriter writer = new PrintWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8), true);
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+
+                    writer.print(request);
+                    writer.flush();
+
+                    String response = reader.readLine();
+                    if (response != null && response.startsWith(expectedPrefix)) {
+                        String output = "hi client no " + clientId;
+                        synchronized (clientOutputs) {
+                            clientOutputs.put(clientId, output);
+                        }
+                        return "SUCCESS client " + clientId + " -> " + response;
+                    }
+                    return "FAIL client " + clientId + " response=" + response;
+                } catch (IOException e) {
+                    attempt++;
+                    if (attempt >= maxRetries) {
+                        return "FAIL client " + clientId + " error=" + e.getClass().getSimpleName();
+                    }
+                    try {
+                        Thread.sleep(100 * attempt);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return "FAIL client " + clientId + " interrupted";
+                    }
+                }
+            }
+            return "FAIL client " + clientId + " max retries exceeded";
+        } finally {
+            done.countDown();
+        }
+    }
+}
+
