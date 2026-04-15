@@ -1,0 +1,213 @@
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class server {
+    private static final int PORT = 9091;
+    private static final int BUFFER_SIZE = 4096;
+    private static final int SELECT_TIMEOUT_MS = 1000;
+    private static final int MAX_CLIENTS = 10000;
+    private static final AtomicInteger clientCounter = new AtomicInteger(0);
+    private static final TreeMap<Integer, String> outputs = new TreeMap<>();
+
+    public static void main(String[] args) {
+        System.out.println("Server is starting on port " + PORT + "...");
+        int workerCount = Math.max(2, Runtime.getRuntime().availableProcessors() * 2);
+        ExecutorService workerPool = new ThreadPoolExecutor(
+                workerCount,
+                workerCount,
+                0L,
+                TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<>(MAX_CLIENTS * 2),
+                Executors.defaultThreadFactory(),
+                new ThreadPoolExecutor.AbortPolicy());
+
+        try (Selector selector = Selector.open();
+             ServerSocketChannel serverChannel = ServerSocketChannel.open()) {
+
+            serverChannel.bind(new InetSocketAddress(PORT), 5000);
+            serverChannel.configureBlocking(false);
+            serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+
+            while (true) {
+                int readyKeys = selector.select(SELECT_TIMEOUT_MS);
+                if (readyKeys == 0) {
+                    continue;
+                }
+
+                Iterator<SelectionKey> iterator = selector.selectedKeys().iterator();
+                while (iterator.hasNext()) {
+                    SelectionKey key = iterator.next();
+                    iterator.remove();
+
+                    if (!key.isValid()) {
+                        continue;
+                    }
+
+                    try {
+                        if (key.isAcceptable()) {
+                            acceptNewClient(selector, serverChannel);
+                        }
+                        if (key.isValid() && key.isReadable()) {
+                            handleRead(key, workerPool);
+                        }
+                        if (key.isValid() && key.isWritable()) {
+                            handleWrite(key);
+                        }
+                    } catch (java.nio.channels.CancelledKeyException ex) {
+                        // Key was cancelled, skip it
+                    } catch (IOException ex) {
+                        closeClient(key);
+                    }
+                }
+                
+                if (outputs.size() == MAX_CLIENTS) {
+                    break;
+                }
+            }
+        } catch (IOException ex) {
+            System.err.println("Server failed: " + ex.getMessage());
+            ex.printStackTrace();
+        } finally {
+            workerPool.shutdownNow();
+            printResults();
+        }
+    }
+
+    private static void printResults() {
+        System.out.println("\n=== SERVER OUTPUT ===");
+        for (Map.Entry<Integer, String> entry : outputs.entrySet()) {
+            System.out.println(entry.getValue());
+        }
+    }
+
+    private static void acceptNewClient(Selector selector, ServerSocketChannel serverChannel) throws IOException {
+        SocketChannel clientChannel = serverChannel.accept();
+        if (clientChannel == null) {
+            return;
+        }
+
+        clientChannel.configureBlocking(false);
+        clientChannel.socket().setReuseAddress(true);
+        SelectionKey key = clientChannel.register(selector, SelectionKey.OP_READ);
+        key.attach(new ConnectionContext());
+    }
+
+    private static void handleRead(SelectionKey key, ExecutorService workerPool) throws IOException {
+        SocketChannel clientChannel = (SocketChannel) key.channel();
+        ConnectionContext context = (ConnectionContext) key.attachment();
+        context.readBuffer.clear();
+
+        int bytesRead = clientChannel.read(context.readBuffer);
+        if (bytesRead == -1) {
+            closeClient(key);
+            return;
+        }
+        if (bytesRead == 0) {
+            return;
+        }
+
+        context.readBuffer.flip();
+        context.pending.append(StandardCharsets.UTF_8.decode(context.readBuffer));
+
+        workerPool.execute(() -> {
+            try {
+                processPendingMessages(key, context);
+            } catch (IOException ex) {
+                closeClient(key);
+            }
+        });
+    }
+
+    private static void processPendingMessages(SelectionKey key, ConnectionContext context) throws IOException {
+        String pendingText = context.pending.toString();
+        int newlineIndex;
+        while ((newlineIndex = pendingText.indexOf('\n')) >= 0) {
+            String line = pendingText.substring(0, newlineIndex).trim();
+            pendingText = pendingText.substring(newlineIndex + 1);
+            
+            String response = createResponse(line);
+            context.outgoing.add(ByteBuffer.wrap(response.getBytes(StandardCharsets.UTF_8)));
+        }
+
+        context.pending.setLength(0);
+        context.pending.append(pendingText);
+
+        try {
+            synchronized (key) {
+                if (key.isValid()) {
+                    key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
+                    key.selector().wakeup();
+                }
+            }
+        } catch (java.nio.channels.CancelledKeyException ignored) {
+            // Key was cancelled
+        }
+    }
+
+    private static String createResponse(String message) {
+        String lower = message.toLowerCase();
+        if (lower.startsWith("hey server iam client number ")) {
+            String clientId = message.substring(message.lastIndexOf(' ') + 1).trim();
+            String output = "hi iam client no" + clientId;
+            try {
+                int id = Integer.parseInt(clientId);
+                synchronized (outputs) {
+                    outputs.put(id, output);
+                }
+            } catch (NumberFormatException ignored) {
+            }
+            String response = "hii client " + clientId;
+            return response + "\n";
+        }
+        return "hii client\n";
+    }
+
+    private static void handleWrite(SelectionKey key) throws IOException {
+        try {
+            SocketChannel clientChannel = (SocketChannel) key.channel();
+            ConnectionContext context = (ConnectionContext) key.attachment();
+
+            ByteBuffer buffer = context.outgoing.peek();
+            while (buffer != null) {
+                clientChannel.write(buffer);
+                if (buffer.hasRemaining()) {
+                    break;
+                }
+                context.outgoing.poll();
+                buffer = context.outgoing.peek();
+            }
+
+            if (context.outgoing.isEmpty()) {
+                synchronized (key) {
+                    if (key.isValid()) {
+                        key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
+                    }
+                }
+            }
+        } catch (java.nio.channels.CancelledKeyException ignored) {
+            // Key was cancelled
+        }
+    }
+
+    private static void closeClient(SelectionKey key) {
+        try {
+            key.channel().close();
+        } catch (IOException ignored) {
+        }
+        key.cancel();
+    }
+
+    private static class ConnectionContext {
+        final ByteBuffer readBuffer = ByteBuffer.allocateDirect(BUFFER_SIZE);
+        final Queue<ByteBuffer> outgoing = new ConcurrentLinkedQueue<>();
+        final StringBuilder pending = new StringBuilder();
+    }
+}
+
+
